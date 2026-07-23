@@ -217,6 +217,10 @@ func (p *plugin) registerMigrations() error {
 		process.Enable(vm)
 		buffer.Enable(vm)
 
+		if p.config.Sandboxed {
+			scrubProcess(vm)
+		}
+
 		BindCore(vm)
 		BindDbx(vm)
 		BindSecurity(vm)
@@ -306,6 +310,10 @@ func (p *plugin) registerHooks() error {
 		console.Enable(vm)
 		process.Enable(vm)
 		buffer.Enable(vm)
+
+		if p.config.Sandboxed {
+			scrubProcess(vm)
+		}
 
 		BindCore(vm)
 		BindDbx(vm)
@@ -603,4 +611,18 @@ func filesContent(dirPath string, pattern string) (map[string][]byte, error) {
 	}
 
 	return result, nil
+}
+
+// scrubProcess replaces the node-compat process.env / process.argv on a
+// sandboxed VM with an empty object / empty array, so untrusted code cannot read
+// host environment variables (e.g. MT_SUPERUSER_PASSWORD) or argv through the
+// process shim after $os.getenv has been withheld.
+func scrubProcess(vm *sobek.Runtime) {
+	proc := vm.Get("process")
+	obj, ok := proc.(*sobek.Object)
+	if !ok || obj == nil {
+		return // process shim absent; nothing to scrub
+	}
+	_ = obj.Set("env", vm.NewObject())
+	_ = obj.Set("argv", vm.NewArray())
 }
