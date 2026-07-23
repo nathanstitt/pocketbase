@@ -16,6 +16,7 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/hook"
 	"github.com/pocketbase/pocketbase/tools/list"
+	"github.com/pocketbase/pocketbase/tools/router"
 	"github.com/pocketbase/pocketbase/tools/routine"
 	"github.com/pocketbase/pocketbase/ui"
 	"golang.org/x/crypto/acme"
@@ -47,31 +48,17 @@ type ServeConfig struct {
 	AllowedOrigins []string
 }
 
-// Serve starts a new app web server.
-//
-// NB! The app should be bootstrapped before starting the web server.
-//
-// Example:
-//
-//	app.Bootstrap()
-//	apis.Serve(app, apis.ServeConfig{
-//		HttpAddr:        "127.0.0.1:8080",
-//		ShowStartBanner: false,
-//	})
-func Serve(app core.App, config ServeConfig) error {
+// buildBaseRouter constructs the app's base router: NewRouter plus the default
+// CORS binding and the admin UI static route. It is shared by Serve and
+// BuildServeMux so both produce an identical base router.
+func buildBaseRouter(app core.App, config ServeConfig) (*router.Router[*core.RequestEvent], error) {
 	if len(config.AllowedOrigins) == 0 {
 		config.AllowedOrigins = []string{"*"}
 	}
 
-	// ensure that the latest migrations are applied before starting the server
-	err := app.RunAllMigrations()
-	if err != nil {
-		return err
-	}
-
 	pbRouter, err := NewRouter(app)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	pbRouter.Bind(CORS(CORSConfig{
@@ -97,6 +84,73 @@ func Serve(app core.App, config ServeConfig) error {
 				return e.Next()
 			}).
 			Bind(Gzip())
+	}
+
+	return pbRouter, nil
+}
+
+// BuildServeMux builds and returns the app's HTTP handler (mux) without starting
+// a server or listener. It constructs the base router, fires the OnServe hook so
+// plugins can bind their routes, and returns the built mux.
+//
+// This is the reusable core of Serve for embedders that manage their own
+// http.Server (e.g. multi-app routers): call BuildServeMux per app and dispatch
+// to the returned handlers. The app must already be bootstrapped.
+//
+// Note: OnServe is triggered with a nil ServeEvent.Server and nil Listener, since
+// no server is started here. OnServe handlers that dereference e.Server must
+// nil-check; the built-in plugins bind via e.Router and are unaffected.
+func BuildServeMux(app core.App, config ServeConfig) (http.Handler, error) {
+	pbRouter, err := buildBaseRouter(app, config)
+	if err != nil {
+		return nil, err
+	}
+
+	var handler http.Handler
+	serveEvent := new(core.ServeEvent)
+	serveEvent.App = app
+	serveEvent.Router = pbRouter
+	serveEvent.InstallerFunc = DefaultInstallerFunc
+
+	err = app.OnServe().Trigger(serveEvent, func(e *core.ServeEvent) error {
+		h, err := e.Router.BuildMux()
+		if err != nil {
+			return err
+		}
+		handler = h
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if handler == nil {
+		return nil, errors.New("the OnServe listener was not initialized. Did you forget to call the ServeEvent.Next() method?")
+	}
+
+	return handler, nil
+}
+
+// Serve starts a new app web server.
+//
+// NB! The app should be bootstrapped before starting the web server.
+//
+// Example:
+//
+//	app.Bootstrap()
+//	apis.Serve(app, apis.ServeConfig{
+//		HttpAddr:        "127.0.0.1:8080",
+//		ShowStartBanner: false,
+//	})
+func Serve(app core.App, config ServeConfig) error {
+	// ensure that the latest migrations are applied before starting the server
+	err := app.RunAllMigrations()
+	if err != nil {
+		return err
+	}
+
+	pbRouter, err := buildBaseRouter(app, config)
+	if err != nil {
+		return err
 	}
 
 	// start http server
