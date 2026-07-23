@@ -1,8 +1,15 @@
 package jsvm
 
 import (
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pocketbase/pocketbase/apis"
+	"github.com/pocketbase/pocketbase/core"
+	"github.com/pocketbase/pocketbase/tests"
 )
 
 func TestIsTypeScript(t *testing.T) {
@@ -82,5 +89,135 @@ func TestTransformSource_SyntaxErrorIsClear(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "bad.pb.ts") {
 		t.Fatalf("error should name the file: %v", err)
+	}
+}
+
+// TestTSHook_EndToEnd proves a `.pb.ts` hook file with TS-only syntax is
+// transpiled by the filesContent seam, loaded through the real hooks loader
+// (Register -> registerHooks), and serves a live HTTP route.
+//
+// Not parallel: Register mutates process-global state (hook executors bound to
+// $app, plus the shared registries) and the assertion drives a real route.
+func TestTSHook_EndToEnd(t *testing.T) {
+	testApp, _ := tests.NewTestApp()
+	defer testApp.Cleanup()
+
+	hooksDir := filepath.Join(testApp.DataDir(), "ts_hooks")
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// `interface` and the `as Payload` assertion are TS-only syntax goja cannot
+	// parse; if the seam didn't transpile, registerHooks would fail to compile.
+	hookSrc := `
+		interface Payload { ok: boolean }
+		routerAdd('GET', '/tstest', (e) => e.json(200, { ok: true } as Payload))
+	`
+	if err := os.WriteFile(filepath.Join(hooksDir, "main.pb.ts"), []byte(hookSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// point MigrationsDir at an empty dir so only the hook under test loads
+	emptyMigrations := filepath.Join(testApp.DataDir(), "ts_hooks_empty_migrations")
+	if err := os.MkdirAll(emptyMigrations, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Register(testApp, Config{
+		HooksDir:      hooksDir,
+		MigrationsDir: emptyMigrations,
+	})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	baseRouter, err := apis.NewRouter(testApp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// trigger the serve event so the JS-registered routes are attached
+	serveEvent := new(core.ServeEvent)
+	serveEvent.App = testApp
+	serveEvent.Router = baseRouter
+	_ = testApp.OnServe().Trigger(serveEvent, func(e *core.ServeEvent) error {
+		req := httptest.NewRequest("GET", "/tstest", nil)
+		recorder := httptest.NewRecorder()
+
+		mux, err := e.Router.BuildMux()
+		if err != nil {
+			t.Fatalf("Failed to build router mux: %v", err)
+		}
+		mux.ServeHTTP(recorder, req)
+
+		if recorder.Code != 200 {
+			t.Fatalf("Expected status code %d, got %d (body: %q)", 200, recorder.Code, recorder.Body.String())
+		}
+
+		body := strings.TrimSpace(recorder.Body.String())
+		if body != `{"ok":true}` {
+			t.Fatalf("Expected body %q, got %q", `{"ok":true}`, body)
+		}
+
+		return nil
+	})
+}
+
+// TestTSMigration_EndToEnd proves a `.ts` migration file with TS-only syntax is
+// transpiled by the filesContent seam and runs through the real migration path.
+//
+// Migrations bypass p.compile and run via vm.RunScript directly, so this only
+// passes if the transpile seam lives in filesContent (feeding registerMigrations),
+// not on p.compile. If the hook test passes but this fails, the seam is misplaced.
+//
+// Not parallel: the jsvm `migrate` binding registers into the process-global
+// core.AppMigrations list, so we snapshot/restore it to avoid leaking the
+// migration (and its captured VM) into other tests' RunAllMigrations calls.
+func TestTSMigration_EndToEnd(t *testing.T) {
+	savedMigrations := core.AppMigrations
+	defer func() { core.AppMigrations = savedMigrations }()
+
+	testApp, _ := tests.NewTestApp()
+	defer testApp.Cleanup()
+
+	migrationsDir := filepath.Join(testApp.DataDir(), "ts_migrations")
+	if err := os.MkdirAll(migrationsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// `as any` is TS-only syntax; if the seam didn't transpile, registerMigrations'
+	// vm.RunScript would fail to parse this file.
+	migrationSrc := `
+		migrate((app) => {
+			const c = new Collection({ id: 'pbc_tsmig_01', name: 'ts_widgets', type: 'base' } as any)
+			app.save(c)
+		}, (app) => {
+			app.delete(app.findCollectionByNameOrId('ts_widgets'))
+		})
+	`
+	if err := os.WriteFile(filepath.Join(migrationsDir, "001_ts_widgets.ts"), []byte(migrationSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// point HooksDir at an empty dir so only the migration under test loads
+	emptyHooks := filepath.Join(testApp.DataDir(), "ts_migrations_empty_hooks")
+	if err := os.MkdirAll(emptyHooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Register(testApp, Config{
+		HooksDir:      emptyHooks,
+		MigrationsDir: migrationsDir,
+	})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	if err := testApp.RunAllMigrations(); err != nil {
+		t.Fatalf("RunAllMigrations: %v", err)
+	}
+
+	if _, err := testApp.FindCollectionByNameOrId("ts_widgets"); err != nil {
+		t.Fatalf("expected ts_widgets collection to be created by the .ts migration, got %v", err)
 	}
 }
