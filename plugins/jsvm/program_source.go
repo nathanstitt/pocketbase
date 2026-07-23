@@ -1,6 +1,6 @@
 package jsvm
 
-import "github.com/dop251/goja"
+import "github.com/grafana/sobek"
 
 // ProgramSource is an optional hook that lets an embedder supply (and typically
 // cache/share) compiled goja programs across multiple plugin instances.
@@ -11,9 +11,9 @@ import "github.com/dop251/goja"
 //
 // An implementation typically keys its cache on (src, strict) so that identical
 // program sources compiled with the same strictness across plugin instances
-// resolve to a single compiled *goja.Program.
+// resolve to a single compiled *sobek.Program.
 type ProgramSource interface {
-	Compile(name, src string, strict bool) (*goja.Program, error)
+	Compile(name, src string, strict bool) (*sobek.Program, error)
 }
 
 // compile returns a compiled program for the given JS source, routing through
@@ -21,9 +21,9 @@ type ProgramSource interface {
 // otherwise. strict selects ECMAScript strict mode: hook FILES compile sloppy
 // (strict=false, matching goja's RunScript) while wrapped callback programs
 // compile strict (strict=true, matching the existing MustCompile(..., true) sites).
-func (p *plugin) compile(src string, strict bool) (*goja.Program, error) {
+func (p *plugin) compile(src string, strict bool) (*sobek.Program, error) {
 	if p.config.ProgramSource != nil {
 		return p.config.ProgramSource.Compile(defaultScriptPath, src, strict)
 	}
-	return goja.Compile(defaultScriptPath, src, strict)
+	return sobek.Compile(defaultScriptPath, src, strict)
 }

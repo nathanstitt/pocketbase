@@ -4,7 +4,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/dop251/goja"
+	"github.com/grafana/sobek"
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tests"
@@ -16,8 +16,8 @@ func TestHooksAppReset(t *testing.T) {
 	testApp, _ := tests.NewTestApp()
 	defer testApp.Cleanup()
 
-	createVM := func() *goja.Runtime {
-		vm := goja.New()
+	createVM := func() *sobek.Runtime {
+		vm := sobek.New()
 		vm.SetFieldNameMapper(FieldMapper{})
 		vm.Set("$app", testApp)
 		return vm
@@ -56,7 +56,7 @@ func TestHooksAppReset(t *testing.T) {
 	}
 
 	// check the executor state
-	pool.run(func(vm *goja.Runtime) error {
+	pool.run(func(vm *sobek.Runtime) error {
 		val, err := vm.RunScript("verify", `$app`)
 		if err != nil {
 			t.Fatal(err)
@@ -76,8 +76,8 @@ func TestRouterHandlerAppReset(t *testing.T) {
 	testApp, _ := tests.NewTestApp()
 	defer testApp.Cleanup()
 
-	createVM := func() *goja.Runtime {
-		vm := goja.New()
+	createVM := func() *sobek.Runtime {
+		vm := sobek.New()
 		vm.SetFieldNameMapper(FieldMapper{})
 		vm.Set("$app", testApp)
 		return vm
@@ -136,7 +136,7 @@ func TestRouterHandlerAppReset(t *testing.T) {
 		})
 	}
 
-	pool.run(func(vm *goja.Runtime) error {
+	pool.run(func(vm *sobek.Runtime) error {
 		val, err := vm.RunScript("verify", `$app`)
 		if err != nil {
 			t.Fatal(err)
@@ -156,8 +156,8 @@ func TestRouterMiddlewareFuncAppReset(t *testing.T) {
 	testApp, _ := tests.NewTestApp()
 	defer testApp.Cleanup()
 
-	createVM := func() *goja.Runtime {
-		vm := goja.New()
+	createVM := func() *sobek.Runtime {
+		vm := sobek.New()
 		vm.SetFieldNameMapper(FieldMapper{})
 		vm.Set("$app", testApp)
 		return vm
@@ -217,7 +217,7 @@ func TestRouterMiddlewareFuncAppReset(t *testing.T) {
 		})
 	}
 
-	pool.run(func(vm *goja.Runtime) error {
+	pool.run(func(vm *sobek.Runtime) error {
 		val, err := vm.RunScript("verify", `$app`)
 		if err != nil {
 			t.Fatal(err)
@@ -237,8 +237,8 @@ func TestRouterMiddlewareClassAppReset(t *testing.T) {
 	testApp, _ := tests.NewTestApp()
 	defer testApp.Cleanup()
 
-	createVM := func() *goja.Runtime {
-		vm := goja.New()
+	createVM := func() *sobek.Runtime {
+		vm := sobek.New()
 		vm.SetFieldNameMapper(FieldMapper{})
 		vm.Set("$app", testApp)
 		BindCore(vm)
@@ -299,7 +299,7 @@ func TestRouterMiddlewareClassAppReset(t *testing.T) {
 		})
 	}
 
-	pool.run(func(vm *goja.Runtime) error {
+	pool.run(func(vm *sobek.Runtime) error {
 		val, err := vm.RunScript("verify", `$app`)
 		if err != nil {
 			t.Fatal(err)

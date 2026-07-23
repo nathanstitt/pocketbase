@@ -3,26 +3,26 @@ package jsvm
 import (
 	"testing"
 
-	"github.com/dop251/goja"
+	"github.com/grafana/sobek"
 )
 
 // countingSource records how many times Compile was invoked per source string,
 // mimicking a shared cache that compiles once per unique source.
 type countingSource struct {
 	calls map[string]int
-	cache map[string]*goja.Program
+	cache map[string]*sobek.Program
 }
 
 func newCountingSource() *countingSource {
-	return &countingSource{calls: map[string]int{}, cache: map[string]*goja.Program{}}
+	return &countingSource{calls: map[string]int{}, cache: map[string]*sobek.Program{}}
 }
 
-func (c *countingSource) Compile(name, src string, strict bool) (*goja.Program, error) {
+func (c *countingSource) Compile(name, src string, strict bool) (*sobek.Program, error) {
 	c.calls[src]++
 	if p, ok := c.cache[src]; ok {
 		return p, nil
 	}
-	p, err := goja.Compile(name, src, strict)
+	p, err := sobek.Compile(name, src, strict)
 	if err != nil {
 		return nil, err
 	}
@@ -35,7 +35,7 @@ func (c *countingSource) Compile(name, src string, strict bool) (*goja.Program, 
 func TestRegisterHooks_UsesProgramSourceForFiles(t *testing.T) {
 	src := newCountingSource()
 	p := &plugin{config: Config{ProgramSource: src}}
-	loader := goja.New()
+	loader := sobek.New()
 
 	if err := p.compileHookFiles(loader, map[string][]byte{"main.pb.js": []byte("var noop = 1")}); err != nil {
 		t.Fatalf("compileHookFiles error: %v", err)
@@ -49,8 +49,8 @@ func TestRegisterHooks_UsesProgramSourceForFiles(t *testing.T) {
 // mode (like goja's RunScript), so pre-existing sloppy-mode hook files (implicit
 // globals, octal literals) still load. A strict-mode compile would reject these.
 func TestCompileHookFiles_PreservesSloppyMode(t *testing.T) {
-	p := &plugin{config: Config{}} // nil ProgramSource -> direct goja.Compile
-	loader := goja.New()
+	p := &plugin{config: Config{}} // nil ProgramSource -> direct sobek.Compile
+	loader := sobek.New()
 	// Octal literal is a SyntaxError in strict mode, legal in sloppy mode.
 	err := p.compileHookFiles(loader, map[string][]byte{"legacy.pb.js": []byte("var x = 0777")})
 	if err != nil {
@@ -94,7 +94,7 @@ func TestCompileHelper_ProducesRunnableProgram(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	vm := goja.New()
+	vm := sobek.New()
 	v, err := vm.RunProgram(prog)
 	if err != nil {
 		t.Fatalf("run error: %v", err)
@@ -106,7 +106,7 @@ func TestCompileHelper_ProducesRunnableProgram(t *testing.T) {
 
 // TestBinds_CompileCallbacksViaProgramSourceStrict verifies the wrapped callback
 // program shape used by the bind sites routes through ProgramSource and compiles
-// in strict mode (matching the original goja.MustCompile(..., true) behavior).
+// in strict mode (matching the original sobek.MustCompile(..., true) behavior).
 func TestBinds_CompileCallbacksViaProgramSourceStrict(t *testing.T) {
 	src := newCountingSource()
 	p := &plugin{config: Config{ProgramSource: src}}
@@ -139,9 +139,9 @@ func TestSharedProgram_IsolatesRuntimeGlobals(t *testing.T) {
 		t.Fatalf("compile error: %v", err)
 	}
 
-	vmA := goja.New()
+	vmA := sobek.New()
 	vmA.Set("$app", "APP_A")
-	vmB := goja.New()
+	vmB := sobek.New()
 	vmB.Set("$app", "APP_B")
 
 	rA, err := vmA.RunProgram(prog)
