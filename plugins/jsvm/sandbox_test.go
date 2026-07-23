@@ -190,3 +190,52 @@ func TestNonSandboxedMigrationHasHostBindings(t *testing.T) {
 		t.Fatalf("non-sandboxed migration load failed: %v", err)
 	}
 }
+
+func TestSandboxApisStaticNoTraversal(t *testing.T) {
+	root := t.TempDir()
+	// A secret file OUTSIDE the served root.
+	secret := filepath.Join(filepath.Dir(root), "outside_secret.txt")
+	if err := os.WriteFile(secret, []byte("TOPSECRET"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(secret) })
+
+	served := filepath.Join(root, "public")
+	if err := os.MkdirAll(served, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(served, "ok.txt"), []byte("PUBLIC"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	hook := `routerAdd('GET','/assets/{path...}', $apis.static(` + "`" + served + "`" + `, false))`
+	app := newSandboxApp(t, hook)
+
+	// Build the serve mux once (BuildServeMux fires OnServe, which registers the
+	// hook route plus baseline routes like /_/extensions.js — building it twice
+	// on the same app re-registers those and panics). Reuse the one mux for both
+	// the legit request and the traversal attempt.
+	mux, err := apis.BuildServeMux(app, apis.ServeConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Legit file serves.
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/assets/ok.txt", nil))
+	if rec.Code != 200 || !contains(rec.Body.String(), "PUBLIC") {
+		t.Fatalf("expected to serve ok.txt, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Traversal to the outside secret must NOT succeed. Build the request with a
+	// raw (un-normalized) target so the traversal actually reaches the mux — a
+	// plain path string would be cleaned by net/http before dispatch.
+	req := httptest.NewRequest("GET", "/assets/ok.txt", nil)
+	req.URL.Path = "/assets/../outside_secret.txt"
+	req.URL.RawPath = "/assets/%2e%2e/outside_secret.txt"
+	rec2 := httptest.NewRecorder()
+	mux.ServeHTTP(rec2, req)
+	if rec2.Code == 200 && contains(rec2.Body.String(), "TOPSECRET") {
+		t.Fatalf("SECURITY: $apis.static leaked a file outside its root: %s", rec2.Body.String())
+	}
+}
