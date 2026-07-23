@@ -69,3 +69,73 @@ func TestSandboxProcessEnvEmpty(t *testing.T) {
 		t.Fatalf("expected sandboxed process.env to be empty, got %s", body)
 	}
 }
+
+func TestSandboxHostBindingsAbsent(t *testing.T) {
+	// Each global must be undefined under Sandboxed. The hook reports typeof for
+	// each dangerous global via a route.
+	hook := `
+		routerAdd('GET', '/caps', (e) => {
+			return e.json(200, {
+				os:         typeof $os,
+				http:       typeof $http,
+				filesystem: typeof $filesystem,
+				filepath:   typeof $filepath,
+			})
+		})
+	`
+	app := newSandboxApp(t, hook)
+	rec := serveRoute(t, app, "GET", "/caps")
+	if rec.Code != 200 {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	for _, cap := range []string{"os", "http", "filesystem", "filepath"} {
+		want := `"` + cap + `":"undefined"`
+		if !contains(rec.Body.String(), want) {
+			t.Fatalf("expected $%s undefined under sandbox, got %s", cap, rec.Body.String())
+		}
+	}
+}
+
+func TestSandboxSafeBindingsPresent(t *testing.T) {
+	// The safe subset must still work: routing already proven by the routes above;
+	// assert $security (crypto) and $app (DB) are present and callable.
+	hook := `
+		routerAdd('GET', '/safe', (e) => {
+			const token = $security.randomString(10)
+			return e.json(200, { security: typeof $security, app: typeof $app, tokenLen: token.length })
+		})
+	`
+	app := newSandboxApp(t, hook)
+	rec := serveRoute(t, app, "GET", "/safe")
+	if rec.Code != 200 {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{`"security":"object"`, `"app":"object"`, `"tokenLen":10`} {
+		if !contains(body, want) {
+			t.Fatalf("expected %s in safe-bindings body, got %s", want, body)
+		}
+	}
+}
+
+func TestNonSandboxedStillHasHostBindings(t *testing.T) {
+	// Regression: with Sandboxed unset, $os must still be present (full API).
+	app, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Cleanup)
+	hooksDir := filepath.Join(t.TempDir(), "pb_hooks")
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hook := `routerAdd('GET','/caps',(e)=>e.json(200,{os:typeof $os}))`
+	if err := os.WriteFile(filepath.Join(hooksDir, "main.pb.js"), []byte(hook), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	MustRegister(app, Config{HooksDir: hooksDir}) // Sandboxed defaults false
+	rec := serveRoute(t, app, "GET", "/caps")
+	if !contains(rec.Body.String(), `"os":"object"`) {
+		t.Fatalf("expected $os present when not sandboxed, got %s", rec.Body.String())
+	}
+}
