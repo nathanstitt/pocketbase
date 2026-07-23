@@ -1,8 +1,8 @@
-// Package jsvm implements pluggable utilities for binding a JS goja runtime
+// Package jsvm implements pluggable utilities for binding a JS sobek runtime
 // to the PocketBase instance (loading migrations, attaching to app hooks, etc.).
 //
 // The package also exports several reusable bindings so that users
-// can utilize them as part of their own custom goja runtime setup.
+// can utilize them as part of their own custom sobek runtime setup.
 //
 // Example:
 //
@@ -64,8 +64,8 @@ type Config struct {
 	// attach custom Go variables and functions.
 	OnInit func(vm *sobek.Runtime)
 
-	// ProgramSource is an optional hook to supply/share compiled goja programs
-	// across plugin instances. If nil, programs are compiled directly with goja
+	// ProgramSource is an optional hook to supply/share compiled sobek programs
+	// across plugin instances. If nil, programs are compiled directly with sobek
 	// (the default, single-app behavior).
 	ProgramSource ProgramSource
 
@@ -340,7 +340,7 @@ func (p *plugin) registerHooks() error {
 
 // compileHookFiles executes each hook file's top-level code on the provided
 // loader vm, compiling via p.compile so an optional ProgramSource can share the
-// programs. Hook files compile in sloppy mode (strict=false) to match goja's
+// programs. Hook files compile in sloppy mode (strict=false) to match sobek's
 // RunScript semantics. The panic/recover behavior mirrors the original inline
 // loop (HooksWatch => log, else => panic).
 func (p *plugin) compileHookFiles(loader *sobek.Runtime, files map[string][]byte) error {
@@ -370,7 +370,7 @@ func (p *plugin) compileHookFiles(loader *sobek.Runtime, files map[string][]byte
 }
 
 // normalizeExceptions registers a global error handler that
-// wraps the extracted goja exception error value for consistency
+// wraps the extracted sobek exception error value for consistency
 // when throwing or returning errors.
 func (p *plugin) normalizeServeExceptions(e *core.RequestEvent) error {
 	err := e.Next()
