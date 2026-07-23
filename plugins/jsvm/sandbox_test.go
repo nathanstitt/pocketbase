@@ -204,15 +204,13 @@ func TestNonSandboxedMigrationHasHostBindings(t *testing.T) {
 	}
 }
 
-func TestSandboxApisStaticNoTraversal(t *testing.T) {
+// $apis.static mounts an author-chosen host directory (os.DirFS on an arbitrary
+// path) and can serve any host file — so it is withheld entirely under sandbox
+// rather than merely traversal-guarded. A sandboxed hook that references it must
+// fail to load (the symbol is undefined). See TestSandboxApisStaticAbsent for
+// the positive assertion that the rest of $apis stays available.
+func TestSandboxApisStaticUnavailable(t *testing.T) {
 	root := t.TempDir()
-	// A secret file OUTSIDE the served root.
-	secret := filepath.Join(filepath.Dir(root), "outside_secret.txt")
-	if err := os.WriteFile(secret, []byte("TOPSECRET"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Remove(secret) })
-
 	served := filepath.Join(root, "public")
 	if err := os.MkdirAll(served, 0o755); err != nil {
 		t.Fatal(err)
@@ -221,35 +219,25 @@ func TestSandboxApisStaticNoTraversal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	hook := `routerAdd('GET','/assets/{path...}', $apis.static(` + "`" + served + "`" + `, false))`
-	app := newSandboxApp(t, hook)
-
-	// Build the serve mux once (BuildServeMux fires OnServe, which registers the
-	// hook route plus baseline routes like /_/extensions.js — building it twice
-	// on the same app re-registers those and panics). Reuse the one mux for both
-	// the legit request and the traversal attempt.
-	mux, err := apis.BuildServeMux(app, apis.ServeConfig{})
+	app, err := tests.NewTestApp()
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(app.Cleanup)
 
-	// Legit file serves.
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/assets/ok.txt", nil))
-	if rec.Code != 200 || !contains(rec.Body.String(), "PUBLIC") {
-		t.Fatalf("expected to serve ok.txt, got %d %s", rec.Code, rec.Body.String())
+	hooksDir := filepath.Join(t.TempDir(), "pb_hooks")
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Referencing $apis.static runs at hook LOAD; under sandbox it is undefined,
+	// so registration must return an error (a tenant cannot mount a host dir).
+	hook := `routerAdd('GET','/assets/{path...}', $apis.static(` + "`" + served + "`" + `, false))`
+	if err := os.WriteFile(filepath.Join(hooksDir, "main.pb.js"), []byte(hook), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
-	// Traversal to the outside secret must NOT succeed. Build the request with a
-	// raw (un-normalized) target so the traversal actually reaches the mux — a
-	// plain path string would be cleaned by net/http before dispatch.
-	req := httptest.NewRequest("GET", "/assets/ok.txt", nil)
-	req.URL.Path = "/assets/../outside_secret.txt"
-	req.URL.RawPath = "/assets/%2e%2e/outside_secret.txt"
-	rec2 := httptest.NewRecorder()
-	mux.ServeHTTP(rec2, req)
-	if rec2.Code == 200 && contains(rec2.Body.String(), "TOPSECRET") {
-		t.Fatalf("SECURITY: $apis.static leaked a file outside its root: %s", rec2.Body.String())
+	if err := Register(app, Config{HooksDir: hooksDir, Sandboxed: true}); err == nil {
+		t.Fatal("SECURITY: sandboxed hook using $apis.static registered without error")
 	}
 }
 
@@ -277,5 +265,65 @@ func TestSandboxHookThrowAtLoadReturnsError(t *testing.T) {
 	}()
 	if err := Register(app, Config{HooksDir: hooksDir, Sandboxed: true}); err == nil {
 		t.Fatal("expected Register to return an error for a load-throwing sandboxed hook, got nil")
+	}
+}
+
+func TestSandboxApisStaticAbsent(t *testing.T) {
+	hook := `routerAdd('GET','/s',(e)=>e.json(200,{static: typeof ($apis && $apis.static)}))`
+	app := newSandboxApp(t, hook)
+	rec := serveRoute(t, app, "GET", "/s")
+	if rec.Code != 200 {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !contains(rec.Body.String(), `"static":"undefined"`) {
+		t.Fatalf("expected $apis.static undefined under sandbox, got %s", rec.Body.String())
+	}
+}
+
+func TestSandboxRequireCannotReadHostFile(t *testing.T) {
+	secret := filepath.Join(t.TempDir(), "creds.json")
+	if err := os.WriteFile(secret, []byte(`{"key":"HOST-SECRET"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hook := "routerAdd('GET','/r',(e)=>{ try { const c = require(" + "`" + secret + "`" + "); return e.json(200,{leaked:c.key}) } catch (err) { return e.json(200,{blocked:true}) } })"
+	app := newSandboxApp(t, hook)
+	rec := serveRoute(t, app, "GET", "/r")
+	if rec.Code != 200 {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if contains(rec.Body.String(), "HOST-SECRET") {
+		t.Fatalf("SECURITY: require read a host file under sandbox: %s", rec.Body.String())
+	}
+	if !contains(rec.Body.String(), `"blocked":true`) {
+		t.Fatalf("expected require to be blocked, got %s", rec.Body.String())
+	}
+}
+
+func TestSandboxTemplateNoFileLoad(t *testing.T) {
+	secret := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(secret, []byte("TEMPLATE-SECRET"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hook := "routerAdd('GET','/t',(e)=>{" +
+		" const lf = typeof ($template && $template.loadFiles);" +
+		" let render='';" +
+		" try { render = $template.loadString('hi {{.}}').render('x') } catch (err) { render = 'ERR' }" +
+		" let leaked=false;" +
+		" try { const r = $template.loadFiles(" + "`" + secret + "`" + "); if (r.render({}).indexOf('TEMPLATE-SECRET')>=0) leaked=true } catch (err) {}" +
+		" return e.json(200,{loadFiles: lf, render: render, leaked: leaked}) })"
+	app := newSandboxApp(t, hook)
+	rec := serveRoute(t, app, "GET", "/t")
+	if rec.Code != 200 {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if contains(body, `"leaked":true`) || contains(body, "TEMPLATE-SECRET") {
+		t.Fatalf("SECURITY: $template read a host file under sandbox: %s", body)
+	}
+	if !contains(body, `"loadFiles":"undefined"`) {
+		t.Fatalf("expected $template.loadFiles undefined under sandbox, got %s", body)
+	}
+	if !contains(body, `"render":"hi x"`) {
+		t.Fatalf("expected loadString to still render, got %s", body)
 	}
 }

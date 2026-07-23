@@ -864,20 +864,21 @@ func BindForms(vm *sobek.Runtime) {
 // handlers, middlewares and other related helpers.
 //
 // See https://pocketbase.io/jsvm/modules/_apis.html.
-func BindApis(vm *sobek.Runtime) {
+func BindApis(vm *sobek.Runtime) { bindApisCommon(vm, true) }
+
+// BindApisSandboxed registers the $apis helpers safe for untrusted code —
+// everything BindApis provides EXCEPT $apis.static (a raw filesystem read).
+func BindApisSandboxed(vm *sobek.Runtime) { bindApisCommon(vm, false) }
+
+// bindApisCommon installs the $apis object. When withStatic is false the raw
+// $apis.static filesystem-read helper is omitted (sandboxed tenants).
+func bindApisCommon(vm *sobek.Runtime, withStatic bool) {
 	obj := vm.NewObject()
 	vm.Set("$apis", obj)
 
-	obj.Set("static", func(dirOrFS any, indexFallback bool) func(*core.RequestEvent) error {
-		switch v := dirOrFS.(type) {
-		case fs.FS:
-			return apis.Static(v, indexFallback)
-		case string:
-			return apis.Static(os.DirFS(v), indexFallback)
-		default:
-			panic("$apis.static expects the first argument to be either a plain string path or fs.FS value")
-		}
-	})
+	if withStatic {
+		bindApisStatic(vm, obj)
+	}
 
 	// middlewares
 	obj.Set("requireGuestOnly", apis.RequireGuestOnly)
@@ -901,6 +902,22 @@ func BindApis(vm *sobek.Runtime) {
 	registerFactoryAsConstructor(vm, "UnauthorizedError", router.NewUnauthorizedError)
 	registerFactoryAsConstructor(vm, "TooManyRequestsError", router.NewTooManyRequestsError)
 	registerFactoryAsConstructor(vm, "InternalServerError", router.NewInternalServerError)
+}
+
+// bindApisStatic registers $apis.static, which serves an author-chosen host
+// directory (os.DirFS on an arbitrary path) — a raw filesystem read, installed
+// only for trusted (non-sandboxed) apps.
+func bindApisStatic(vm *sobek.Runtime, apisObj *sobek.Object) {
+	apisObj.Set("static", func(dirOrFS any, indexFallback bool) func(*core.RequestEvent) error {
+		switch v := dirOrFS.(type) {
+		case fs.FS:
+			return apis.Static(v, indexFallback)
+		case string:
+			return apis.Static(os.DirFS(v), indexFallback)
+		default:
+			panic("$apis.static expects the first argument to be either a plain string path or fs.FS value")
+		}
+	})
 }
 
 // BindHTTP registers $http.* namespaced object with common utils

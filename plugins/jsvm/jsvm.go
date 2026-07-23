@@ -193,6 +193,31 @@ type plugin struct {
 	config Config
 }
 
+// newRequireRegistry builds the require registry for a plugin's VMs. When
+// sandboxed it installs a loader that refuses every file-based require (native
+// modules like process/console/buffer bypass the loader and still work), so
+// untrusted code cannot require an arbitrary host path to read/execute a file.
+func newRequireRegistry(sandboxed bool) *require.Registry {
+	if sandboxed {
+		return require.NewRegistryWithLoader(func(string) ([]byte, error) {
+			return nil, require.ModuleFileDoesNotExistError
+		})
+	}
+	return new(require.Registry)
+}
+
+// setTemplateBinding installs $template. When sandboxed, only loadString (pure,
+// in-memory) is exposed — loadFiles/loadFS read host files and are withheld.
+func setTemplateBinding(vm *sobek.Runtime, reg *template.Registry, sandboxed bool) {
+	if !sandboxed {
+		vm.Set("$template", reg)
+		return
+	}
+	obj := vm.NewObject()
+	obj.Set("loadString", reg.LoadString)
+	vm.Set("$template", obj)
+}
+
 // registerMigrations registers the JS migrations loader.
 func (p *plugin) registerMigrations() error {
 	// fetch all js migrations sorted by their filename
@@ -206,7 +231,7 @@ func (p *plugin) registerMigrations() error {
 		return err
 	}
 
-	registry := new(require.Registry) // this can be shared by multiple runtimes
+	registry := newRequireRegistry(p.config.Sandboxed) // this can be shared by multiple runtimes
 	templateRegistry := template.NewRegistry()
 
 	for file, content := range files {
@@ -233,7 +258,7 @@ func (p *plugin) registerMigrations() error {
 		BindForms(vm)
 		BindMails(vm)
 
-		vm.Set("$template", templateRegistry)
+		setTemplateBinding(vm, templateRegistry, p.config.Sandboxed)
 		vm.Set("__hooks", absHooksDir)
 
 		vm.Set("migrate", func(up, down func(txApp core.App) error) {
@@ -302,7 +327,7 @@ func (p *plugin) registerHooks() error {
 	})
 
 	// safe to be shared across multiple vms
-	requireRegistry := new(require.Registry)
+	requireRegistry := newRequireRegistry(p.config.Sandboxed)
 	templateRegistry := template.NewRegistry()
 
 	sharedBinds := func(vm *sobek.Runtime) {
@@ -326,10 +351,14 @@ func (p *plugin) registerHooks() error {
 		}
 		BindForms(vm)
 		BindMails(vm)
-		BindApis(vm)
+		if p.config.Sandboxed {
+			BindApisSandboxed(vm)
+		} else {
+			BindApis(vm)
+		}
 
 		vm.Set("$app", p.app)
-		vm.Set("$template", templateRegistry)
+		setTemplateBinding(vm, templateRegistry, p.config.Sandboxed)
 		vm.Set("__hooks", absHooksDir)
 
 		if p.config.OnInit != nil {
