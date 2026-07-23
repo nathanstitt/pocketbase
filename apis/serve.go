@@ -25,6 +25,10 @@ import (
 
 const defaultCSP = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' http://127.0.0.1:* https://tile.openstreetmap.org data: blob:; connect-src 'self' http://127.0.0.1:* https://nominatim.openstreetmap.org; script-src 'self' http://127.0.0.1:*; frame-ancestors 'none'"
 
+// errServeMuxNotInitialized is returned when the OnServe hook completes without
+// building the router mux (typically a handler forgot to call e.Next()).
+var errServeMuxNotInitialized = errors.New("the OnServe hook did not initialize the router mux. Did you forget to call the ServeEvent.Next() method?")
+
 // ServeConfig defines a configuration struct for apis.Serve().
 type ServeConfig struct {
 	// ShowStartBanner indicates whether to show or hide the server start console message.
@@ -97,9 +101,14 @@ func buildBaseRouter(app core.App, config ServeConfig) (*router.Router[*core.Req
 // http.Server (e.g. multi-app routers): call BuildServeMux per app and dispatch
 // to the returned handlers. The app must already be bootstrapped.
 //
-// Note: OnServe is triggered with a nil ServeEvent.Server and nil Listener, since
-// no server is started here. OnServe handlers that dereference e.Server must
-// nil-check; the built-in plugins bind via e.Router and are unaffected.
+// Note: OnServe is triggered with a nil ServeEvent.Server, CertManager, and
+// Listener, since no server is started here. OnServe handlers that dereference
+// those fields must nil-check; the built-in plugins bind via e.Router and are
+// unaffected.
+//
+// Do not also call Serve on the same app: OnServe would fire a second time and
+// re-register routes (BuildMux would then fail) and restart cron. Use
+// BuildServeMux OR Serve for a given app, not both.
 func BuildServeMux(app core.App, config ServeConfig) (http.Handler, error) {
 	pbRouter, err := buildBaseRouter(app, config)
 	if err != nil {
@@ -110,7 +119,7 @@ func BuildServeMux(app core.App, config ServeConfig) (http.Handler, error) {
 	serveEvent := new(core.ServeEvent)
 	serveEvent.App = app
 	serveEvent.Router = pbRouter
-	serveEvent.InstallerFunc = DefaultInstallerFunc
+	serveEvent.InstallerFunc = DefaultInstallerFunc // set for OnServe event parity; no installer is launched here
 
 	err = app.OnServe().Trigger(serveEvent, func(e *core.ServeEvent) error {
 		h, err := e.Router.BuildMux()
@@ -124,7 +133,7 @@ func BuildServeMux(app core.App, config ServeConfig) (http.Handler, error) {
 		return nil, err
 	}
 	if handler == nil {
-		return nil, errors.New("the OnServe listener was not initialized. Did you forget to call the ServeEvent.Next() method?")
+		return nil, errServeMuxNotInitialized
 	}
 
 	return handler, nil
@@ -323,8 +332,7 @@ func Serve(app core.App, config ServeConfig) error {
 	}
 
 	if listener == nil {
-		//nolint:staticcheck
-		return errors.New("The OnServe listener was not initialized. Did you forget to call the ServeEvent.Next() method?")
+		return errServeMuxNotInitialized
 	}
 
 	if config.ShowStartBanner {
