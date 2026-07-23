@@ -20,6 +20,11 @@ func isTypeScript(name string) bool {
 // byte-for-byte. Called from filesContent so BOTH the hooks and the migrations
 // load paths get it (migrations bypass p.compile — see jsvm.go).
 func transformSource(name string, content []byte) ([]byte, error) {
+	// Keep empty input empty: esbuild would emit a ~175-byte inline-sourcemap stub
+	// for "", but registerHooks (jsvm.go ~L255) relies on an empty .pb.ts staying
+	// 0 bytes to fire its types.d.ts-directive bootstrap for freshly-created dev
+	// hook files. The router's publish-time transpileForStore intentionally has NO
+	// such guard (the store is production; that dev bootstrap doesn't apply there).
 	if len(content) == 0 {
 		return content, nil
 	}
