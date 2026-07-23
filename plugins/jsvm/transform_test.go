@@ -177,6 +177,186 @@ func TestTSHook_EndToEnd(t *testing.T) {
 	}
 }
 
+// TestSobekNodeCompat_EndToEnd proves the vendored Node-compat modules
+// (console/process/buffer, plus require) are wired and functional inside a hook
+// running on the sobek engine. A `.pb.js` hook exercises the globals and a
+// require(...) call, then serves them back over a live HTTP route.
+//
+// Not parallel: same reason as TestTSHook_EndToEnd (Register mutates
+// process-global hook/registry state and the assertion drives a real route).
+func TestSobekNodeCompat_EndToEnd(t *testing.T) {
+	testApp, _ := tests.NewTestApp()
+	defer testApp.Cleanup()
+
+	hooksDir := filepath.Join(testApp.DataDir(), "node_hooks")
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// console.log proves the console module; Buffer.from proves the buffer module;
+	// typeof process proves the process module; require('buffer') proves the
+	// require registry resolves a vendored core module.
+	//
+	// Everything the handler needs is resolved INSIDE the handler body:
+	// routerAdd handlers are serialized (handler.String()) and re-run in a fresh
+	// pooled executor VM, so they cannot close over top-level module variables —
+	// that's the upstream PocketBase design, not a sobek behavior. The vendored
+	// modules are enabled on every executor VM, so require/Buffer/process/console
+	// all resolve from within the handler.
+	hookSrc := `
+		console.log('node-compat check')
+		routerAdd('GET', '/nodecheck', (e) => {
+			const bufMod = require('buffer')
+			return e.json(200, {
+				bufLen: Buffer.from('abc').length,
+				hasProcess: typeof process !== 'undefined',
+				requireWorks: typeof bufMod.Buffer === 'function',
+			})
+		})
+	`
+	if err := os.WriteFile(filepath.Join(hooksDir, "main.pb.js"), []byte(hookSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	emptyMigrations := filepath.Join(testApp.DataDir(), "node_hooks_empty_migrations")
+	if err := os.MkdirAll(emptyMigrations, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Register(testApp, Config{
+		HooksDir:      hooksDir,
+		MigrationsDir: emptyMigrations,
+	})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	baseRouter, err := apis.NewRouter(testApp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	serveEvent := new(core.ServeEvent)
+	serveEvent.App = testApp
+	serveEvent.Router = baseRouter
+
+	var served bool
+	var recorder *httptest.ResponseRecorder
+	err = testApp.OnServe().Trigger(serveEvent, func(e *core.ServeEvent) error {
+		req := httptest.NewRequest("GET", "/nodecheck", nil)
+		recorder = httptest.NewRecorder()
+
+		mux, err := e.Router.BuildMux()
+		if err != nil {
+			return err
+		}
+		mux.ServeHTTP(recorder, req)
+
+		served = true
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("OnServe Trigger: %v", err)
+	}
+
+	if !served {
+		t.Fatal("OnServe finalizer callback never ran; assertions would have been skipped")
+	}
+
+	if recorder.Code != 200 {
+		t.Fatalf("Expected status code %d, got %d (body: %q)", 200, recorder.Code, recorder.Body.String())
+	}
+
+	body := strings.TrimSpace(recorder.Body.String())
+	want := `{"bufLen":3,"hasProcess":true,"requireWorks":true}`
+	if body != want {
+		t.Fatalf("Expected body %q, got %q", want, body)
+	}
+}
+
+// TestES2020Feature_EndToEnd proves the sobek engine parses and executes ES2020
+// syntax (optional chaining + nullish coalescing) directly. The hook is a
+// `.pb.js` file so it passes through the transpile seam byte-identical (see
+// TestTransformSource_PassesThroughJS) — the feature therefore runs on the
+// ENGINE, not via esbuild down-leveling, which is what proves sobek handles it.
+//
+// Not parallel: same reason as TestTSHook_EndToEnd.
+func TestES2020Feature_EndToEnd(t *testing.T) {
+	testApp, _ := tests.NewTestApp()
+	defer testApp.Cleanup()
+
+	hooksDir := filepath.Join(testApp.DataDir(), "es2020_hooks")
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// `o?.a ?? 'ok'` is ES2020 optional-chaining + nullish-coalescing. On an
+	// engine without ES2020 support this would fail to parse at compile time.
+	hookSrc := `
+		routerAdd('GET', '/es', (e) => {
+			const o = {}
+			return e.json(200, { v: o?.a ?? 'ok' })
+		})
+	`
+	if err := os.WriteFile(filepath.Join(hooksDir, "main.pb.js"), []byte(hookSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	emptyMigrations := filepath.Join(testApp.DataDir(), "es2020_hooks_empty_migrations")
+	if err := os.MkdirAll(emptyMigrations, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Register(testApp, Config{
+		HooksDir:      hooksDir,
+		MigrationsDir: emptyMigrations,
+	})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	baseRouter, err := apis.NewRouter(testApp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	serveEvent := new(core.ServeEvent)
+	serveEvent.App = testApp
+	serveEvent.Router = baseRouter
+
+	var served bool
+	var recorder *httptest.ResponseRecorder
+	err = testApp.OnServe().Trigger(serveEvent, func(e *core.ServeEvent) error {
+		req := httptest.NewRequest("GET", "/es", nil)
+		recorder = httptest.NewRecorder()
+
+		mux, err := e.Router.BuildMux()
+		if err != nil {
+			return err
+		}
+		mux.ServeHTTP(recorder, req)
+
+		served = true
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("OnServe Trigger: %v", err)
+	}
+
+	if !served {
+		t.Fatal("OnServe finalizer callback never ran; assertions would have been skipped")
+	}
+
+	if recorder.Code != 200 {
+		t.Fatalf("Expected status code %d, got %d (body: %q)", 200, recorder.Code, recorder.Body.String())
+	}
+
+	body := strings.TrimSpace(recorder.Body.String())
+	if body != `{"v":"ok"}` {
+		t.Fatalf("Expected body %q, got %q", `{"v":"ok"}`, body)
+	}
+}
+
 // TestTSMigration_EndToEnd proves a `.ts` migration file with TS-only syntax is
 // transpiled by the filesContent seam and runs through the real migration path.
 //
