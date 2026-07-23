@@ -69,6 +69,14 @@ type Config struct {
 	// (the default, single-app behavior).
 	ProgramSource ProgramSource
 
+	// Sandboxed, when true, installs only the capability-safe JS bindings and
+	// omits the host-capability bindings ($os, $http, $filesystem, $filepath)
+	// from BOTH the hook and migration runtimes, and neuters process.env /
+	// process.argv. Intended for running untrusted (multi-tenant) code.
+	//
+	// Default false preserves the full stock single-app API (byte-for-byte).
+	Sandboxed bool
+
 	// HooksWatch enables auto app restarts when a JS app hook file changes.
 	//
 	// Note that currently the application cannot be automatically restarted on Windows
