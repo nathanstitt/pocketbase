@@ -64,6 +64,11 @@ type Config struct {
 	// attach custom Go variables and functions.
 	OnInit func(vm *goja.Runtime)
 
+	// ProgramSource is an optional hook to supply/share compiled goja programs
+	// across plugin instances. If nil, programs are compiled directly with goja
+	// (the default, single-app behavior).
+	ProgramSource ProgramSource
+
 	// HooksWatch enables auto app restarts when a JS app hook file changes.
 	//
 	// Note that currently the application cannot be automatically restarted on Windows
@@ -322,16 +327,28 @@ func (p *plugin) registerHooks() error {
 	// initialize the loader vm
 	loader := goja.New()
 	sharedBinds(loader)
-	hooksBinds(p.app, loader, executors)
-	cronBinds(p.app, loader, executors)
-	routerBinds(p.app, loader, executors)
+	p.hooksBinds(loader, executors)
+	p.cronBinds(loader, executors)
+	p.routerBinds(loader, executors)
 
+	if err := p.compileHookFiles(loader, files); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// compileHookFiles executes each hook file's top-level code on the provided
+// loader vm, compiling via p.compile so an optional ProgramSource can share the
+// programs. Hook files compile in sloppy mode (strict=false) to match goja's
+// RunScript semantics. The panic/recover behavior mirrors the original inline
+// loop (HooksWatch => log, else => panic).
+func (p *plugin) compileHookFiles(loader *goja.Runtime, files map[string][]byte) error {
 	for file, content := range files {
 		func() {
 			defer func() {
-				if err := recover(); err != nil {
-					fmtErr := fmt.Errorf("failed to execute %s:\n - %v", file, err)
-
+				if r := recover(); r != nil {
+					fmtErr := fmt.Errorf("failed to execute %s:\n - %v", file, r)
 					if p.config.HooksWatch {
 						color.Red("%v", fmtErr)
 					} else {
@@ -340,13 +357,15 @@ func (p *plugin) registerHooks() error {
 				}
 			}()
 
-			_, err := loader.RunScript(defaultScriptPath, string(content))
-			if err != nil {
-				panic(err)
+			prog, cerr := p.compile(string(content), false)
+			if cerr != nil {
+				panic(cerr)
+			}
+			if _, rerr := loader.RunProgram(prog); rerr != nil {
+				panic(rerr)
 			}
 		}()
 	}
-
 	return nil
 }
 

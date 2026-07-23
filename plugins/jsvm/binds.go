@@ -40,11 +40,11 @@ import (
 )
 
 // hooksBinds adds wrapped "on*" hook methods by reflecting on core.App.
-func hooksBinds(app core.App, loader *goja.Runtime, executors *vmsPool) {
+func (p *plugin) hooksBinds(loader *goja.Runtime, executors *vmsPool) {
 	fm := FieldMapper{}
 
-	appType := reflect.TypeOf(app)
-	appValue := reflect.ValueOf(app)
+	appType := reflect.TypeOf(p.app)
+	appValue := reflect.ValueOf(p.app)
 	totalMethods := appType.NumMethod()
 	excludeHooks := []string{"OnServe"}
 
@@ -60,7 +60,10 @@ func hooksBinds(app core.App, loader *goja.Runtime, executors *vmsPool) {
 		loader.Set(jsName, func(callback string, tags ...string) {
 			// overwrite the global $app with the hook scoped instance
 			callback = `function(e) { $app = e.app; return (` + callback + `).call(undefined, e) }`
-			pr := goja.MustCompile(defaultScriptPath, "{("+callback+").apply(undefined, __args)}", true)
+			pr, err := p.compile("{("+callback+").apply(undefined, __args)}", true)
+			if err != nil {
+				panic(err)
+			}
 
 			tagsAsValues := make([]reflect.Value, len(tags))
 			for i, tag := range tags {
@@ -86,7 +89,7 @@ func hooksBinds(app core.App, loader *goja.Runtime, executors *vmsPool) {
 					executor.Set("$app", oldApp) // reset to its default for the executor
 
 					// check for returned Go error value
-					if resErr := checkGojaValueForError(app, res); resErr != nil {
+					if resErr := checkGojaValueForError(p.app, res); resErr != nil {
 						return resErr
 					}
 
@@ -102,18 +105,21 @@ func hooksBinds(app core.App, loader *goja.Runtime, executors *vmsPool) {
 	}
 }
 
-func cronBinds(app core.App, loader *goja.Runtime, executors *vmsPool) {
+func (p *plugin) cronBinds(loader *goja.Runtime, executors *vmsPool) {
 	cronAdd := func(jobId, cronExpr, handler string) {
-		pr := goja.MustCompile(defaultScriptPath, "{("+handler+").apply(undefined)}", true)
+		pr, err := p.compile("{("+handler+").apply(undefined)}", true)
+		if err != nil {
+			panic(err)
+		}
 
-		err := app.Cron().Add(jobId, cronExpr, func() {
+		err = p.app.Cron().Add(jobId, cronExpr, func() {
 			err := executors.run(func(executor *goja.Runtime) error {
 				_, err := executor.RunProgram(pr)
 				return err
 			})
 
 			if err != nil {
-				app.Logger().Error(
+				p.app.Logger().Error(
 					"[cronAdd] failed to execute cron job",
 					slog.String("jobId", jobId),
 					slog.String("error", err.Error()),
@@ -127,7 +133,7 @@ func cronBinds(app core.App, loader *goja.Runtime, executors *vmsPool) {
 	loader.Set("cronAdd", cronAdd)
 
 	cronRemove := func(jobId string) {
-		app.Cron().Remove(jobId)
+		p.app.Cron().Remove(jobId)
 	}
 	loader.Set("cronRemove", cronRemove)
 
@@ -147,19 +153,19 @@ func cronBinds(app core.App, loader *goja.Runtime, executors *vmsPool) {
 	}
 }
 
-func routerBinds(app core.App, loader *goja.Runtime, executors *vmsPool) {
+func (p *plugin) routerBinds(loader *goja.Runtime, executors *vmsPool) {
 	loader.Set("routerAdd", func(method string, path string, handler goja.Value, middlewares ...goja.Value) {
-		wrappedMiddlewares, err := wrapMiddlewares(executors, middlewares...)
+		wrappedMiddlewares, err := p.wrapMiddlewares(executors, middlewares...)
 		if err != nil {
 			panic("[routerAdd] failed to wrap middlewares: " + err.Error())
 		}
 
-		wrappedHandler, err := wrapHandlerFunc(executors, handler)
+		wrappedHandler, err := p.wrapHandlerFunc(executors, handler)
 		if err != nil {
 			panic("[routerAdd] failed to wrap handler: " + err.Error())
 		}
 
-		app.OnServe().BindFunc(func(e *core.ServeEvent) error {
+		p.app.OnServe().BindFunc(func(e *core.ServeEvent) error {
 			e.Router.Route(strings.ToUpper(method), path, wrappedHandler).Bind(wrappedMiddlewares...)
 
 			return e.Next()
@@ -167,19 +173,19 @@ func routerBinds(app core.App, loader *goja.Runtime, executors *vmsPool) {
 	})
 
 	loader.Set("routerUse", func(middlewares ...goja.Value) {
-		wrappedMiddlewares, err := wrapMiddlewares(executors, middlewares...)
+		wrappedMiddlewares, err := p.wrapMiddlewares(executors, middlewares...)
 		if err != nil {
 			panic("[routerUse] failed to wrap middlewares: " + err.Error())
 		}
 
-		app.OnServe().BindFunc(func(e *core.ServeEvent) error {
+		p.app.OnServe().BindFunc(func(e *core.ServeEvent) error {
 			e.Router.Bind(wrappedMiddlewares...)
 			return e.Next()
 		})
 	})
 }
 
-func wrapHandlerFunc(executors *vmsPool, handler goja.Value) (func(*core.RequestEvent) error, error) {
+func (p *plugin) wrapHandlerFunc(executors *vmsPool, handler goja.Value) (func(*core.RequestEvent) error, error) {
 	if handler == nil {
 		return nil, errors.New("handler must be non-nil")
 	}
@@ -189,7 +195,10 @@ func wrapHandlerFunc(executors *vmsPool, handler goja.Value) (func(*core.Request
 		// "native" handler func - no need to wrap
 		return h, nil
 	case func(goja.FunctionCall) goja.Value, string:
-		pr := goja.MustCompile(defaultScriptPath, "{("+handler.String()+").apply(undefined, __args)}", true)
+		pr, err := p.compile("{("+handler.String()+").apply(undefined, __args)}", true)
+		if err != nil {
+			panic(err)
+		}
 
 		wrappedHandler := func(e *core.RequestEvent) error {
 			return executors.run(func(executor *goja.Runtime) error {
@@ -221,7 +230,7 @@ type gojaHookHandler struct {
 	priority       int
 }
 
-func wrapMiddlewares(executors *vmsPool, rawMiddlewares ...goja.Value) ([]*hook.Handler[*core.RequestEvent], error) {
+func (p *plugin) wrapMiddlewares(executors *vmsPool, rawMiddlewares ...goja.Value) ([]*hook.Handler[*core.RequestEvent], error) {
 	wrappedMiddlewares := make([]*hook.Handler[*core.RequestEvent], len(rawMiddlewares))
 
 	for i, m := range rawMiddlewares {
@@ -243,7 +252,10 @@ func wrapMiddlewares(executors *vmsPool, rawMiddlewares ...goja.Value) ([]*hook.
 				return nil, errors.New("missing or invalid Middleware function")
 			}
 
-			pr := goja.MustCompile(defaultScriptPath, "{("+v.serializedFunc+").apply(undefined, __args)}", true)
+			pr, err := p.compile("{("+v.serializedFunc+").apply(undefined, __args)}", true)
+			if err != nil {
+				panic(err)
+			}
 
 			wrappedMiddlewares[i] = &hook.Handler[*core.RequestEvent]{
 				Id:       v.id,
@@ -267,7 +279,10 @@ func wrapMiddlewares(executors *vmsPool, rawMiddlewares ...goja.Value) ([]*hook.
 				},
 			}
 		case func(goja.FunctionCall) goja.Value, string:
-			pr := goja.MustCompile(defaultScriptPath, "{("+m.String()+").apply(undefined, __args)}", true)
+			pr, err := p.compile("{("+m.String()+").apply(undefined, __args)}", true)
+			if err != nil {
+				panic(err)
+			}
 
 			wrappedMiddlewares[i] = &hook.Handler[*core.RequestEvent]{
 				Func: func(e *core.RequestEvent) error {

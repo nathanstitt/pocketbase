@@ -1596,7 +1596,7 @@ func TestCronBindsCount(t *testing.T) {
 
 	pool := newPool(1, func() *goja.Runtime { return goja.New() })
 
-	cronBinds(app, vm, pool)
+	(&plugin{app: app}).cronBinds(vm, pool)
 
 	testBindsCount(vm, "this", 2, t)
 
@@ -1611,7 +1611,7 @@ func TestHooksBindsCount(t *testing.T) {
 	defer app.Cleanup()
 
 	vm := goja.New()
-	hooksBinds(app, vm, nil)
+	(&plugin{app: app}).hooksBinds(vm, nil)
 
 	testBindsCount(vm, "this", 82, t)
 }
@@ -1635,7 +1635,7 @@ func TestHooksBinds(t *testing.T) {
 	pool := newPool(1, vmFactory)
 
 	vm := vmFactory()
-	hooksBinds(app, vm, pool)
+	(&plugin{app: app}).hooksBinds(vm, pool)
 
 	_, err := vm.RunString(`
 		onModelUpdate((e) => {
@@ -1721,7 +1721,7 @@ func TestHooksExceptionUnwrapping(t *testing.T) {
 	pool := newPool(1, vmFactory)
 
 	vm := vmFactory()
-	hooksBinds(app, vm, pool)
+	(&plugin{app: app}).hooksBinds(vm, pool)
 
 	_, err := vm.RunString(`
 		onModelUpdate((e) => {
@@ -1750,7 +1750,7 @@ func TestRouterBindsCount(t *testing.T) {
 	defer app.Cleanup()
 
 	vm := goja.New()
-	routerBinds(app, vm, nil)
+	(&plugin{app: app}).routerBinds(vm, nil)
 
 	testBindsCount(vm, "this", 2, t)
 }
@@ -1776,7 +1776,7 @@ func TestRouterBinds(t *testing.T) {
 	pool := newPool(1, vmFactory)
 
 	vm := vmFactory()
-	routerBinds(app, vm, pool)
+	(&plugin{app: app}).routerBinds(vm, pool)
 
 	_, err := vm.RunString(`
 		routerAdd("GET", "/test", (e) => {

@@ -27,7 +27,7 @@ func TestHooksAppReset(t *testing.T) {
 
 	pool := newPool(1, createVM)
 
-	hooksBinds(testApp, loader, pool)
+	(&plugin{app: testApp}).hooksBinds(loader, pool)
 
 	// register any hook
 	_, err := loader.RunScript("stub", `
@@ -87,7 +87,7 @@ func TestRouterHandlerAppReset(t *testing.T) {
 
 	pool := newPool(1, createVM)
 
-	routerBinds(testApp, loader, pool)
+	(&plugin{app: testApp}).routerBinds(loader, pool)
 
 	// register route handler hook
 	_, err := loader.RunScript("stub", `
@@ -167,7 +167,7 @@ func TestRouterMiddlewareFuncAppReset(t *testing.T) {
 
 	pool := newPool(1, createVM)
 
-	routerBinds(testApp, loader, pool)
+	(&plugin{app: testApp}).routerBinds(loader, pool)
 
 	// register route middleware func
 	_, err := loader.RunScript("stub", `
@@ -249,7 +249,7 @@ func TestRouterMiddlewareClassAppReset(t *testing.T) {
 
 	pool := newPool(1, createVM)
 
-	routerBinds(testApp, loader, pool)
+	(&plugin{app: testApp}).routerBinds(loader, pool)
 
 	// register route middleware class
 	_, err := loader.RunScript("stub", `
