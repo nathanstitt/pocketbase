@@ -139,3 +139,54 @@ func TestNonSandboxedStillHasHostBindings(t *testing.T) {
 		t.Fatalf("expected $os present when not sandboxed, got %s", rec.Body.String())
 	}
 }
+
+func TestSandboxMigrationHasNoHostBindings(t *testing.T) {
+	app, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Cleanup)
+
+	migDir := filepath.Join(t.TempDir(), "pb_migrations")
+	if err := os.MkdirAll(migDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// registerMigrations runs the migration file's TOP-LEVEL code via vm.RunScript
+	// at Register() time; the migrate(up, down) call only registers callbacks (the
+	// up body runs later, during RunAllMigrations). So the $os reference must sit at
+	// top level to be exercised at load. Under sandbox, $os is undefined and the
+	// top-level access must throw a ReferenceError, failing registration.
+	mig := `$os.exec('id'); migrate((app) => {}, (app) => {})`
+	if err := os.WriteFile(filepath.Join(migDir, "1700000000_evil.js"), []byte(mig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err = Register(app, Config{MigrationsDir: migDir, Sandboxed: true})
+	if err == nil {
+		t.Fatal("expected sandboxed migration referencing $os to fail registration, got nil")
+	}
+	if !contains(err.Error(), "os") && !contains(err.Error(), "not defined") && !contains(err.Error(), "ReferenceError") {
+		t.Fatalf("expected a $os-not-defined error, got %v", err)
+	}
+}
+
+func TestNonSandboxedMigrationHasHostBindings(t *testing.T) {
+	app, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Cleanup)
+	migDir := filepath.Join(t.TempDir(), "pb_migrations")
+	if err := os.MkdirAll(migDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// References $os only INSIDE the up callback (not executed at load), so a
+	// non-sandboxed load succeeds — proving $os exists in the non-sandbox path.
+	mig := `migrate((app) => { const _ = typeof $os }, (app) => {})`
+	if err := os.WriteFile(filepath.Join(migDir, "1700000000_ok.js"), []byte(mig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Register(app, Config{MigrationsDir: migDir}); err != nil {
+		t.Fatalf("non-sandboxed migration load failed: %v", err)
+	}
+}
