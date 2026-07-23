@@ -220,10 +220,12 @@ func (p *plugin) registerMigrations() error {
 		BindCore(vm)
 		BindDbx(vm)
 		BindSecurity(vm)
-		BindOS(vm)
-		BindFilepath(vm)
-		BindHTTP(vm)
-		BindFilesystem(vm)
+		if !p.config.Sandboxed {
+			BindOS(vm)
+			BindFilepath(vm)
+			BindHTTP(vm)
+			BindFilesystem(vm)
+		}
 		BindForms(vm)
 		BindMails(vm)
 
@@ -308,10 +310,12 @@ func (p *plugin) registerHooks() error {
 		BindCore(vm)
 		BindDbx(vm)
 		BindSecurity(vm)
-		BindOS(vm)
-		BindFilepath(vm)
-		BindHTTP(vm)
-		BindFilesystem(vm)
+		if !p.config.Sandboxed {
+			BindOS(vm)
+			BindFilepath(vm)
+			BindHTTP(vm)
+			BindFilesystem(vm)
+		}
 		BindForms(vm)
 		BindMails(vm)
 		BindApis(vm)
