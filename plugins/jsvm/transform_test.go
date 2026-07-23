@@ -140,27 +140,41 @@ func TestTSHook_EndToEnd(t *testing.T) {
 	serveEvent := new(core.ServeEvent)
 	serveEvent.App = testApp
 	serveEvent.Router = baseRouter
-	_ = testApp.OnServe().Trigger(serveEvent, func(e *core.ServeEvent) error {
+
+	// The finalizer callback only does the serve-dependent work and stashes the
+	// result into these outer-scope vars. Assertions run AFTER Trigger returns so
+	// a callback that never fires fails loudly (via `served`) instead of vacuously.
+	var served bool
+	var recorder *httptest.ResponseRecorder
+	err = testApp.OnServe().Trigger(serveEvent, func(e *core.ServeEvent) error {
 		req := httptest.NewRequest("GET", "/tstest", nil)
-		recorder := httptest.NewRecorder()
+		recorder = httptest.NewRecorder()
 
 		mux, err := e.Router.BuildMux()
 		if err != nil {
-			t.Fatalf("Failed to build router mux: %v", err)
+			return err
 		}
 		mux.ServeHTTP(recorder, req)
 
-		if recorder.Code != 200 {
-			t.Fatalf("Expected status code %d, got %d (body: %q)", 200, recorder.Code, recorder.Body.String())
-		}
-
-		body := strings.TrimSpace(recorder.Body.String())
-		if body != `{"ok":true}` {
-			t.Fatalf("Expected body %q, got %q", `{"ok":true}`, body)
-		}
-
+		served = true
 		return nil
 	})
+	if err != nil {
+		t.Fatalf("OnServe Trigger: %v", err)
+	}
+
+	if !served {
+		t.Fatal("OnServe finalizer callback never ran; assertions would have been skipped")
+	}
+
+	if recorder.Code != 200 {
+		t.Fatalf("Expected status code %d, got %d (body: %q)", 200, recorder.Code, recorder.Body.String())
+	}
+
+	body := strings.TrimSpace(recorder.Body.String())
+	if body != `{"ok":true}` {
+		t.Fatalf("Expected body %q, got %q", `{"ok":true}`, body)
+	}
 }
 
 // TestTSMigration_EndToEnd proves a `.ts` migration file with TS-only syntax is
