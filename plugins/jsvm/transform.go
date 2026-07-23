@@ -20,6 +20,9 @@ func isTypeScript(name string) bool {
 // byte-for-byte. Called from filesContent so BOTH the hooks and the migrations
 // load paths get it (migrations bypass p.compile — see jsvm.go).
 func transformSource(name string, content []byte) ([]byte, error) {
+	if len(content) == 0 {
+		return content, nil
+	}
 	if !isTypeScript(name) {
 		return content, nil
 	}

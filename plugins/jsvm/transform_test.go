@@ -65,6 +65,16 @@ func TestTransformSource_WarningStillTranspiles(t *testing.T) {
 	}
 }
 
+func TestTransformSource_EmptyPassesThrough(t *testing.T) {
+	out, err := transformSource("main.pb.ts", []byte{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 0 {
+		t.Fatalf("empty .pb.ts must stay empty (0 bytes); got %d bytes: %q", len(out), out)
+	}
+}
+
 func TestTransformSource_SyntaxErrorIsClear(t *testing.T) {
 	out, err := transformSource("bad.pb.ts", []byte("const x: = "))
 	if err == nil {
