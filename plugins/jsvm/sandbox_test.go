@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/pocketbase/pocketbase/apis"
+	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tests"
 )
 
@@ -141,6 +142,13 @@ func TestNonSandboxedStillHasHostBindings(t *testing.T) {
 }
 
 func TestSandboxMigrationHasNoHostBindings(t *testing.T) {
+	// The jsvm `migrate` binding registers into the process-global
+	// core.AppMigrations list; snapshot/restore it so this test's migration
+	// (and its captured VM) doesn't leak into other tests' RunAllMigrations calls
+	// (which the parallel *AppReset tests run concurrently -> data race).
+	savedMigrations := core.AppMigrations
+	defer func() { core.AppMigrations = savedMigrations }()
+
 	app, err := tests.NewTestApp()
 	if err != nil {
 		t.Fatal(err)
@@ -171,6 +179,11 @@ func TestSandboxMigrationHasNoHostBindings(t *testing.T) {
 }
 
 func TestNonSandboxedMigrationHasHostBindings(t *testing.T) {
+	// Snapshot/restore the process-global migrations list (see the sandbox
+	// migration test above) so this registration doesn't leak into other tests.
+	savedMigrations := core.AppMigrations
+	defer func() { core.AppMigrations = savedMigrations }()
+
 	app, err := tests.NewTestApp()
 	if err != nil {
 		t.Fatal(err)
