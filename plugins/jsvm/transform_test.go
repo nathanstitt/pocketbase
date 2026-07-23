@@ -47,6 +47,24 @@ func TestTransformSource_PassesThroughJS(t *testing.T) {
 	}
 }
 
+func TestTransformSource_WarningStillTranspiles(t *testing.T) {
+	// `typeof x === "strnig"` is a typo esbuild flags as a warning (the string is
+	// never a valid typeof result) but does NOT treat as an error. The transform
+	// must still succeed and emit runnable JS.
+	src := []byte("const x: number = 1\nif (typeof x === \"strnig\") { routerAdd('GET','/x',()=>{}) }")
+	out, err := transformSource("warn.pb.ts", src)
+	if err != nil {
+		t.Fatalf("warning-only input must not fail: %v", err)
+	}
+	js := string(out)
+	if strings.Contains(js, ": number") {
+		t.Fatalf("type annotation not stripped: %s", js)
+	}
+	if !strings.Contains(js, "routerAdd") {
+		t.Fatalf("expected routerAdd call preserved: %s", js)
+	}
+}
+
 func TestTransformSource_SyntaxErrorIsClear(t *testing.T) {
 	out, err := transformSource("bad.pb.ts", []byte("const x: = "))
 	if err == nil {

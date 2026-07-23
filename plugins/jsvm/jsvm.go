@@ -583,7 +583,11 @@ func filesContent(dirPath string, pattern string) (map[string][]byte, error) {
 			return nil, err
 		}
 
-		result[f.Name()] = raw
+		transformed, err := transformSource(f.Name(), raw)
+		if err != nil {
+			return nil, err
+		}
+		result[f.Name()] = transformed
 	}
 
 	return result, nil

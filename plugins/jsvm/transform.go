@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/evanw/esbuild/pkg/api"
+	"github.com/fatih/color"
 )
 
 // isTypeScript reports whether a hook/migration filename is TypeScript source
@@ -33,6 +34,9 @@ func transformSource(name string, content []byte) ([]byte, error) {
 			msgs = append(msgs, e.Text)
 		}
 		return nil, fmt.Errorf("transpile %s: %s", name, strings.Join(msgs, "; "))
+	}
+	for _, w := range res.Warnings {
+		color.Yellow("transpile warning %s: %s", name, w.Text)
 	}
 	return res.Code, nil
 }
