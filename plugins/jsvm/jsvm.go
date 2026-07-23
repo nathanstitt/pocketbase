@@ -364,14 +364,23 @@ func (p *plugin) registerHooks() error {
 // RunScript semantics. The panic/recover behavior mirrors the original inline
 // loop (HooksWatch => log, else => panic).
 func (p *plugin) compileHookFiles(loader *sobek.Runtime, files map[string][]byte) error {
+	var loadErr error
 	for file, content := range files {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
 					fmtErr := fmt.Errorf("failed to execute %s:\n - %v", file, r)
-					if p.config.HooksWatch {
+					switch {
+					case p.config.Sandboxed:
+						// Untrusted code: a load-time throw must fail this app's
+						// registration (returned to the caller), never panic the
+						// shared multi-tenant process.
+						if loadErr == nil {
+							loadErr = fmtErr
+						}
+					case p.config.HooksWatch:
 						color.Red("%v", fmtErr)
-					} else {
+					default:
 						panic(fmtErr)
 					}
 				}
@@ -385,8 +394,11 @@ func (p *plugin) compileHookFiles(loader *sobek.Runtime, files map[string][]byte
 				panic(rerr)
 			}
 		}()
+		if loadErr != nil {
+			return loadErr
+		}
 	}
-	return nil
+	return loadErr
 }
 
 // normalizeExceptions registers a global error handler that

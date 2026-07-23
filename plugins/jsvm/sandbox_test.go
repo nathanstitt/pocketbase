@@ -239,3 +239,30 @@ func TestSandboxApisStaticNoTraversal(t *testing.T) {
 		t.Fatalf("SECURITY: $apis.static leaked a file outside its root: %s", rec2.Body.String())
 	}
 }
+
+func TestSandboxHookThrowAtLoadReturnsError(t *testing.T) {
+	app, err := tests.NewTestApp()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Cleanup)
+
+	hooksDir := filepath.Join(t.TempDir(), "pb_hooks")
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Top-level code runs at hook LOAD. Under sandbox $os is undefined, so this
+	// throws at load. It must be RETURNED as an error, not panic the process.
+	if err := os.WriteFile(filepath.Join(hooksDir, "main.pb.js"), []byte(`$os.exec('id')`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("Register panicked on a load-time hook error under sandbox: %v", r)
+		}
+	}()
+	if err := Register(app, Config{HooksDir: hooksDir, Sandboxed: true}); err == nil {
+		t.Fatal("expected Register to return an error for a load-throwing sandboxed hook, got nil")
+	}
+}
