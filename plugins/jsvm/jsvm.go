@@ -62,7 +62,20 @@ type Config struct {
 	// OnInit is an optional function that will be called
 	// after a JS runtime is initialized, allowing you to
 	// attach custom Go variables and functions.
+	//
+	// Note this fires on EVERY runtime — the loader and every executor in
+	// the hooks pool. Use it for stateless bindings (a namespace of native
+	// funcs). For a binding whose job is to REGISTER something, use
+	// OnLoaderInit instead, or the same handler is registered once per VM.
 	OnInit func(vm *sobek.Runtime)
+
+	// OnLoaderInit is an optional function called once, on the hooks LOADER
+	// runtime only, with a Compiler bound to that plugin's executor pool.
+	//
+	// It is the Go→JS seam: install a binding here that takes a JS handler
+	// and hands the resulting Callable to host code, so Go can invoke package
+	// TS at a defined point and use what it returns. See callable.go.
+	OnLoaderInit LoaderInit
 
 	// ProgramSource is an optional hook to supply/share compiled sobek programs
 	// across plugin instances. If nil, programs are compiled directly with sobek
@@ -379,6 +392,12 @@ func (p *plugin) registerHooks() error {
 	p.hooksBinds(loader, executors)
 	p.cronBinds(loader, executors)
 	p.routerBinds(loader, executors)
+
+	// Loader-only bindings. Registration must happen exactly once, so this
+	// runs here rather than in sharedBinds/OnInit (which fire per VM).
+	if p.config.OnLoaderInit != nil {
+		p.config.OnLoaderInit(loader, p.newCompiler(executors))
+	}
 
 	if err := p.compileHookFiles(loader, files); err != nil {
 		return err
